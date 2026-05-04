@@ -212,13 +212,52 @@ describe('CLI', () => {
     );
   });
 
-  it('rejects interactive totals greater than 25 tickets', async () => {
-    const prompt = createPrompt(['1', '20', 'yes', '5', 'yes', '1']);
+  it('fails before asking about child tickets when adult tickets exceed 25', async () => {
+    const questions = [];
+    const prompt = createPrompt(['1', '26'], questions);
 
     await assert.rejects(
       () => collectInteractivePurchaseOptions(prompt),
       /total tickets cannot exceed 25/,
     );
+    assert.deepEqual(questions, [
+      'Enter account ID: ',
+      'Enter number of adult tickets: ',
+    ]);
+  });
+
+  it('fails before asking about infant tickets when adult and child tickets exceed 25', async () => {
+    const questions = [];
+    const prompt = createPrompt(['1', '20', 'yes', '6'], questions);
+
+    await assert.rejects(
+      () => collectInteractivePurchaseOptions(prompt),
+      /total tickets cannot exceed 25/,
+    );
+    assert.deepEqual(questions, [
+      'Enter account ID: ',
+      'Enter number of adult tickets: ',
+      'Are you getting child tickets? (y/n): ',
+      'Enter number of child tickets: ',
+    ]);
+  });
+
+  it('rejects interactive totals greater than 25 after infant tickets', async () => {
+    const questions = [];
+    const prompt = createPrompt(['1', '20', 'yes', '5', 'yes', '1'], questions);
+
+    await assert.rejects(
+      () => collectInteractivePurchaseOptions(prompt),
+      /total tickets cannot exceed 25/,
+    );
+    assert.deepEqual(questions, [
+      'Enter account ID: ',
+      'Enter number of adult tickets: ',
+      'Are you getting child tickets? (y/n): ',
+      'Enter number of child tickets: ',
+      'Are you getting infant tickets? (y/n): ',
+      'Enter number of infant tickets: ',
+    ]);
   });
 
   it('runs a valid interactive purchase and prints payment and seat values', async () => {

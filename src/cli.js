@@ -161,16 +161,17 @@ export async function collectInteractivePurchaseOptions(prompt) {
     [TICKET_TYPES.CHILD]: 0,
     [TICKET_TYPES.INFANT]: 0,
   };
+  validateTotalTicketCount(counts);
 
   if (await askYesNo(prompt, 'Are you getting child tickets? (y/n): ')) {
     counts[TICKET_TYPES.CHILD] = await askOptionalTicketCount(prompt, 'child');
+    validateTotalTicketCount(counts);
   }
 
   if (await askYesNo(prompt, 'Are you getting infant tickets? (y/n): ')) {
     counts[TICKET_TYPES.INFANT] = await askOptionalTicketCount(prompt, 'infant');
+    validateTotalTicketCount(counts);
   }
-
-  validateTotalTicketCount(counts);
 
   return { accountId, counts };
 }
