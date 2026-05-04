@@ -28,6 +28,24 @@ function createService() {
   return { service, state };
 }
 
+function createAlteredTicketTypeRequest({ ticketType = 'ADULT', noOfTickets = 1 } = {}) {
+  class AlteredTicketTypeRequest extends TicketTypeRequest {
+    constructor() {
+      super('ADULT', 1);
+    }
+
+    getTicketType() {
+      return ticketType;
+    }
+
+    getNoOfTickets() {
+      return noOfTickets;
+    }
+  }
+
+  return new AlteredTicketTypeRequest();
+}
+
 describe('TicketService', () => {
   let service;
   let state;
@@ -82,6 +100,17 @@ describe('TicketService', () => {
       service.purchaseTickets(1, new TicketTypeRequest('ADULT', 25));
       assert.deepEqual(state.paymentCalls, [{ accountId: 1, totalAmountToPay: 625 }]);
       assert.deepEqual(state.seatCalls, [{ accountId: 1, totalSeatsToAllocate: 25 }]);
+    });
+
+    it('processes exactly 25 mixed tickets', () => {
+      service.purchaseTickets(
+        1,
+        new TicketTypeRequest('ADULT', 10),
+        new TicketTypeRequest('CHILD', 10),
+        new TicketTypeRequest('INFANT', 5),
+      );
+      assert.deepEqual(state.paymentCalls, [{ accountId: 1, totalAmountToPay: 400 }]);
+      assert.deepEqual(state.seatCalls, [{ accountId: 1, totalSeatsToAllocate: 20 }]);
     });
   });
 
@@ -197,14 +226,21 @@ describe('TicketService', () => {
 
     it('rejects zero ticket quantity', () => {
       assert.throws(
-        () => service.purchaseTickets(1, new TicketTypeRequest('ADULT', 0)),
+        () => service.purchaseTickets(1, createAlteredTicketTypeRequest({ noOfTickets: 0 })),
         InvalidPurchaseException,
       );
     });
 
     it('rejects negative ticket quantity', () => {
       assert.throws(
-        () => service.purchaseTickets(1, new TicketTypeRequest('ADULT', -1)),
+        () => service.purchaseTickets(1, createAlteredTicketTypeRequest({ noOfTickets: -1 })),
+        InvalidPurchaseException,
+      );
+    });
+
+    it('rejects unsupported ticket types from TicketTypeRequest instances', () => {
+      assert.throws(
+        () => service.purchaseTickets(1, createAlteredTicketTypeRequest({ ticketType: 'SENIOR' })),
         InvalidPurchaseException,
       );
     });
