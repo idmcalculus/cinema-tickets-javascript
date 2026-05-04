@@ -7,6 +7,8 @@
   },
   "type": "module",
   "scripts": {
+    "start": "node src/cli.js --account-id=1 --adult=1",
+    "purchase": "node src/cli.js",
     "test": "node --test"
   }
 }
