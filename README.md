@@ -1,10 +1,6 @@
 # Cinema Tickets JavaScript
 
-Submission for the Department for Work and Pensions Java & JavaScript Software Engineer coding exercise.
-
-- Campaign number: `451133`
-- Candidate/Application number: `17145968`
-- Role: Java & JavaScript Software Engineer
+Submission for the DWP Software Engineer coding exercise.
 
 ## Project Intent
 
