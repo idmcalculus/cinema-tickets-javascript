@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 
 import path from 'node:path';
+import readline from 'node:readline';
+import { stdin, stdout as processStdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import TicketService from './pairtest/TicketService.js';
 import TicketTypeRequest from './pairtest/lib/TicketTypeRequest.js';
 import InvalidPurchaseException from './pairtest/lib/InvalidPurchaseException.js';
 import TicketPaymentService from './thirdparty/paymentgateway/TicketPaymentService.js';
 import SeatReservationService from './thirdparty/seatbooking/SeatReservationService.js';
-import { TICKET_TYPES } from './pairtest/config/ticketRules.js';
+import { MAX_TICKETS_PER_PURCHASE, TICKET_TYPES } from './pairtest/config/ticketRules.js';
 
 const USAGE = `Usage:
+  npm start
   npm run purchase -- --account-id=1 --adult=2 --child=1 --infant=1
 
 Options:
+  npm start launches an interactive purchase flow.
   --account-id, --account  Positive integer account ID.
   --adult                  Number of adult tickets.
   --child                  Number of child tickets.
@@ -145,6 +149,33 @@ export function buildTicketRequests(counts) {
 }
 
 /**
+ * Collects purchase options by prompting the user step-by-step.
+ *
+ * @param {(question: string) => Promise<string>} prompt Question function.
+ * @returns {Promise<{accountId: number, counts: Record<string, number>}>} Interactive purchase options.
+ */
+export async function collectInteractivePurchaseOptions(prompt) {
+  const accountId = await askPositiveInteger(prompt, 'Enter account ID: ');
+  const counts = {
+    [TICKET_TYPES.ADULT]: await askPositiveInteger(prompt, 'Enter number of adult tickets: '),
+    [TICKET_TYPES.CHILD]: 0,
+    [TICKET_TYPES.INFANT]: 0,
+  };
+
+  if (await askYesNo(prompt, 'Are you getting child tickets? (y/n): ')) {
+    counts[TICKET_TYPES.CHILD] = await askOptionalTicketCount(prompt, 'child');
+  }
+
+  if (await askYesNo(prompt, 'Are you getting infant tickets? (y/n): ')) {
+    counts[TICKET_TYPES.INFANT] = await askOptionalTicketCount(prompt, 'infant');
+  }
+
+  validateTotalTicketCount(counts);
+
+  return { accountId, counts };
+}
+
+/**
  * Runs the ticket purchase CLI.
  *
  * @param {string[]} args Command-line arguments excluding node and script paths.
@@ -184,6 +215,82 @@ export function runCli(args, streams = {}) {
     stderr.write('Run "npm run purchase -- --help" for usage.\n');
     return 1;
   }
+}
+
+/**
+ * Runs the interactive ticket purchase CLI.
+ *
+ * @param {{stdout?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream}} [streams] Output streams.
+ * @param {(question: string) => Promise<string>} [prompt] Question function.
+ * @returns {Promise<number>} Process-style exit code.
+ */
+export async function runInteractiveCli(streams = {}, prompt) {
+  const stdout = streams.stdout ?? process.stdout;
+  const stderr = streams.stderr ?? process.stderr;
+  let closePrompt = () => {};
+
+  try {
+    let ask = prompt;
+
+    if (!ask) {
+      const readlinePrompt = createReadlinePrompt();
+      ask = readlinePrompt.ask;
+      closePrompt = readlinePrompt.close;
+    }
+
+    stdout.write('Cinema ticket purchase\n');
+    const options = await collectInteractivePurchaseOptions(ask);
+    const paymentService = new RecordingPaymentService();
+    const seatReservationService = new RecordingSeatReservationService();
+    const ticketService = new TicketService(paymentService, seatReservationService);
+    const ticketRequests = buildTicketRequests(options.counts);
+
+    ticketService.purchaseTickets(options.accountId, ...ticketRequests);
+
+    stdout.write(`${formatSuccessMessage(
+      options.counts,
+      paymentService.getLastPayment(),
+      seatReservationService.getLastReservation(),
+    )}\n`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof InvalidPurchaseException || error instanceof Error
+      ? error.message
+      : 'unknown error';
+    stderr.write(`Purchase failed: ${message}\n`);
+    return 1;
+  } finally {
+    closePrompt();
+  }
+}
+
+/**
+ * Creates a prompt function backed by stdin.
+ *
+ * @returns {{ask: (question: string) => Promise<string>, close: () => void}} Prompt controls.
+ */
+function createReadlinePrompt() {
+  const rl = readline.createInterface({
+    input: stdin,
+    crlfDelay: Infinity,
+  });
+  const lines = rl[Symbol.asyncIterator]();
+
+  return {
+    async ask(question) {
+      processStdout.write(question);
+      const nextLine = await lines.next();
+
+      if (nextLine.done) {
+        throw new Error('input ended before purchase details were completed');
+      }
+
+      return nextLine.value;
+    },
+    close() {
+      rl.close();
+    },
+  };
 }
 
 /**
@@ -258,6 +365,81 @@ function parseInteger(value, label) {
 }
 
 /**
+ * Prompts for a positive integer value.
+ *
+ * @param {(question: string) => Promise<string>} prompt Question function.
+ * @param {string} question Question text.
+ * @returns {Promise<number>} Positive integer answer.
+ */
+async function askPositiveInteger(prompt, question) {
+  return parsePositiveInteger((await prompt(question)).trim(), question.trim());
+}
+
+/**
+ * Prompts for an optional child/infant ticket count.
+ *
+ * @param {(question: string) => Promise<string>} prompt Question function.
+ * @param {'child' | 'infant'} ticketLabel Ticket label for prompt text.
+ * @returns {Promise<number>} Positive quantity, or zero when explicitly confirmed.
+ */
+async function askOptionalTicketCount(prompt, ticketLabel) {
+  const countQuestion = `Enter number of ${ticketLabel} tickets: `;
+
+  while (true) {
+    const count = parseNonNegativeInteger((await prompt(countQuestion)).trim(), countQuestion.trim());
+
+    if (count > 0) {
+      return count;
+    }
+
+    const proceedWithoutTickets = await askYesNo(
+      prompt,
+      `No ${ticketLabel} tickets will be purchased for this order, proceed? (y/n): `,
+    );
+
+    if (proceedWithoutTickets) {
+      return 0;
+    }
+  }
+}
+
+/**
+ * Prompts for a yes/no answer.
+ *
+ * @param {(question: string) => Promise<string>} prompt Question function.
+ * @param {string} question Question text.
+ * @returns {Promise<boolean>} True for yes, false for no.
+ */
+async function askYesNo(prompt, question) {
+  const answer = (await prompt(question)).trim().toLowerCase();
+
+  if (answer === 'y' || answer === 'yes') {
+    return true;
+  }
+
+  if (answer === 'n' || answer === 'no') {
+    return false;
+  }
+
+  throw new Error(`${question.trim()} must be answered with yes or no`);
+}
+
+/**
+ * Validates the total ticket count collected from the interactive flow.
+ *
+ * @param {Record<string, number>} counts Ticket counts keyed by ticket type.
+ * @throws {Error} When the total ticket count exceeds the purchase limit.
+ * @returns {void}
+ */
+function validateTotalTicketCount(counts) {
+  const totalTickets = Object.values(counts).reduce((total, count) => total + count, 0);
+
+  if (totalTickets > MAX_TICKETS_PER_PURCHASE) {
+    throw new Error(`total tickets cannot exceed ${MAX_TICKETS_PER_PURCHASE}`);
+  }
+}
+
+/**
  * Formats a successful purchase summary.
  *
  * @param {Record<string, number>} counts Ticket counts keyed by type.
@@ -291,5 +473,8 @@ function formatTicketCounts(counts) {
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (fileURLToPath(import.meta.url) === invokedPath) {
-  process.exitCode = runCli(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  process.exitCode = args.length === 0
+    ? await runInteractiveCli()
+    : runCli(args);
 }
